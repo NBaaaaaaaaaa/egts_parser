@@ -11,6 +11,7 @@ from logger_files.type_text import Types_text
 
 from config import queue_length, devices_count
 from datetime import datetime
+import time
 
 
 # Процедура получения и отправки пакетов.
@@ -54,11 +55,20 @@ def process_work(connection, address):
     t = Thread(target=receive_data, args=(connection, data_for_db, logging))
     t.start()
 
-    return True
-
 
 # Процедура работы сервера.
 def server_work():
+    process_list = []
+
+    # Процедура проверки живых процессов.
+    def check_process_count():
+        while True:
+            for pr in process_list:
+                if not pr.is_alive():
+                    process_list.remove(pr)
+
+            time.sleep(3)
+
     # Создаем подключение к бд.
     create_cursor(connect_main_db())
     # Создаем подключение к локальной бд процессов.
@@ -78,29 +88,23 @@ def server_work():
 
     print("Сервер запущен и слушает порт {}...".format(port))
 
-    # Создаем пул процессов без указания количества процессов (надо будет смотреть. когда процесс конец.)
-    # по идее надо будет сделать чтобы в моменте макс подключений было сколько то. то есть процесс для
-    # отработанного подключения надо будет удалять или что то делать чтобы могло еще устройство подлкючиться
-    with multiprocessing.Pool(5) as pool:
-        is_create_proc = True
+    # Создаем новый поток для проверки живих процессов.
+    t = Thread(target=check_process_count)
+    t.start()
 
-        try:
-            while True:
-                if is_create_proc:
-                    is_create_proc = False
+    try:
+        while True:
+            if len(process_list) <= devices_count:
+                # Принимаем входящее соединение
+                connection, address = server_socket.accept()
+                print("Установлено соединение с {}".format(address))
 
-                    # Принимаем входящее соединение
-                    connection, address = server_socket.accept()
-                    print("Установлено соединение с {}".format(address))
+                process = multiprocessing.Process(target=process_work, args=(connection, address))
+                process.start()
+                process_list.append(process)
 
-                    is_create_proc = pool.apply_async(process_work, args=(connection, address))
-
-        except KeyboardInterrupt as e:
-            pass
-
-    # # Завершаем пул процессов
-    pool.close()
-    pool.join()
+    except KeyboardInterrupt as e:
+        pass
 
     # Вот с этим надо разобарться как закрыть подулючение
     # Закрываем соединение с бд.
